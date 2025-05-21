@@ -1,59 +1,51 @@
-FROM eclipse-temurin:11-jdk
+FROM eclipse-temurin:17-jdk
+
+# Installer les outils
+RUN apt-get update && apt-get install -y git wget unzip curl
 
 WORKDIR /app
 
-# Installer les outils nécessaires
-RUN apt-get update && apt-get install -y git wget unzip
+# Cloner le repo officiel webapp avec tous les modules
+RUN git clone https://github.com/axelor/open-suite-webapp.git . && \
+    git submodule init && \
+    git submodule update && \
+    git submodule foreach git checkout master && \
+    git submodule foreach git pull origin master
 
-# Copier le code source
-COPY . .
+# Créer le fichier application.properties
+RUN mkdir -p src/main/resources && \
+    echo "db.default.driver=org.postgresql.Driver" > src/main/resources/application.properties && \
+    echo "db.default.url=jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}" >> src/main/resources/application.properties && \
+    echo "db.default.user=${DB_USER}" >> src/main/resources/application.properties && \
+    echo "db.default.password=${DB_PASSWORD}" >> src/main/resources/application.properties && \
+    echo "application.mode=prod" >> src/main/resources/application.properties && \
+    echo "application.base-url=https://${RAILWAY_STATIC_URL}" >> src/main/resources/application.properties
 
-# Configurer Git pour utiliser HTTPS au lieu de SSH
-RUN git config --global url."https://github.com/".insteadOf git@github.com:
-RUN git config --global url."https://".insteadOf git://
-RUN git config --global --add safe.directory /app
+# Compiler le WAR
+RUN ./gradlew --no-daemon clean war -x test
 
-# Stratégie A: Essayer la méthode classique des sous-modules
-RUN (git checkout master && \
-     git submodule init && \
-     git submodule update && \
-     git submodule foreach git checkout master && \
-     git submodule foreach git pull origin master) || echo "Méthode A échouée, passage à la méthode B"
+# Liste des fichiers générés pour vérification
+RUN ls -la build/libs/
 
-# Stratégie B: Télécharger manuellement les composants nécessaires si la stratégie A échoue
-RUN mkdir -p modules && \
-    if [ ! -d "modules/axelor-open-suite" ]; then \
-        echo "Téléchargement manuel des composants nécessaires" && \
-        cd modules && \
-        wget -q https://github.com/axelor/axelor-open-suite/archive/refs/heads/master.zip -O axelor-open-suite.zip && \
-        unzip -q axelor-open-suite.zip && \
-        mv axelor-open-suite-master axelor-open-suite && \
-        cd ..; \
-    fi
+# Télécharger et configurer Tomcat
+RUN wget https://downloads.apache.org/tomcat/tomcat-9/v9.0.85/bin/apache-tomcat-9.0.85.tar.gz && \
+    tar -xzf apache-tomcat-9.0.85.tar.gz && \
+    mv apache-tomcat-9.0.85 /opt/tomcat && \
+    rm -rf /opt/tomcat/webapps/* && \
+    mkdir -p /opt/tomcat/conf/Catalina/localhost
 
-# Vérifier la structure
-RUN ls -la && ls -la modules || true
+# Copier le fichier WAR et s'assurer qu'il est déployé comme ROOT
+RUN cp build/libs/*.war /opt/tomcat/webapps/ROOT.war && \
+    echo '<Context path="" docBase="${catalina.home}/webapps/ROOT.war"></Context>' > /opt/tomcat/conf/Catalina/localhost/ROOT.xml
 
-# Variables d'environnement pour la base de données
-ENV AXELOR_DB_DRIVER org.postgresql.Driver
-ENV AXELOR_DB_URL jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
-ENV AXELOR_DB_USER ${DB_USER}
-ENV AXELOR_DB_PASSWORD ${DB_PASSWORD}
+# Définir JAVA_OPTS pour Tomcat
+ENV JAVA_OPTS="-Xms512m -Xmx1024m -Daxelor.config=/opt/tomcat/conf/application.properties"
 
-# Copier les fichiers de configuration requis s'ils n'existent pas déjà
-RUN if [ ! -f "src/main/resources/application.properties" ]; then \
-        mkdir -p src/main/resources && \
-        echo "db.default.driver = ${AXELOR_DB_DRIVER}" > src/main/resources/application.properties && \
-        echo "db.default.url = ${AXELOR_DB_URL}" >> src/main/resources/application.properties && \
-        echo "db.default.user = ${AXELOR_DB_USER}" >> src/main/resources/application.properties && \
-        echo "db.default.password = ${AXELOR_DB_PASSWORD}" >> src/main/resources/application.properties; \
-    fi
-
-# Compiler l'application (sans les tests) avec une option de secours
-RUN ./gradlew -x test build || echo "La compilation a échoué, mais nous continuons"
+# Copier application.properties dans le répertoire conf de Tomcat
+RUN cp src/main/resources/application.properties /opt/tomcat/conf/application.properties
 
 # Exposer le port
 EXPOSE 8080
 
-# Démarrer l'application
-CMD ["./gradlew", "run"] 
+# Lancer Tomcat avec les options configurées
+CMD ["/opt/tomcat/bin/catalina.sh", "run"] 
