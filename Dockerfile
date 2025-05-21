@@ -1,17 +1,19 @@
 FROM eclipse-temurin:17-jdk
 
-# Installer les outils nécessaires
+# Installer les outils
 RUN apt-get update && apt-get install -y git wget unzip curl
 
-# Définir le dossier de travail
 WORKDIR /app
 
-# Cloner Axelor avec les sous-modules
-RUN git clone --recurse-submodules https://github.com/axelor/axelor-open-suite.git .
-RUN git submodule update --init --recursive
+# Cloner le repo officiel webapp avec tous les modules
+RUN git clone https://github.com/axelor/open-suite-webapp.git . && \
+    git submodule init && \
+    git submodule update && \
+    git submodule foreach git checkout master && \
+    git submodule foreach git pull origin master
 
-# Compiler en .war
-RUN ./gradlew war -x test
+# Compiler le .war
+RUN ./gradlew --no-daemon clean war -x test
 
 # Télécharger Tomcat
 RUN wget https://downloads.apache.org/tomcat/tomcat-9/v9.0.85/bin/apache-tomcat-9.0.85.tar.gz && \
@@ -19,20 +21,15 @@ RUN wget https://downloads.apache.org/tomcat/tomcat-9/v9.0.85/bin/apache-tomcat-
     mv apache-tomcat-9.0.85 /opt/tomcat && \
     rm -rf /opt/tomcat/webapps/*
 
-# Déployer le fichier WAR généré
+# Déployer le .war généré
 RUN cp build/libs/*.war /opt/tomcat/webapps/ROOT.war
 
-# Créer le fichier application.properties avec les variables d'environnement
-RUN mkdir -p /opt/tomcat/conf/ && \
-    echo "db.default.driver = org.postgresql.Driver" > /opt/tomcat/conf/application.properties && \
-    echo "db.default.url = jdbc:postgresql://\${DB_HOST}:\${DB_PORT}/\${DB_NAME}" >> /opt/tomcat/conf/application.properties && \
-    echo "db.default.user = \${DB_USER}" >> /opt/tomcat/conf/application.properties && \
-    echo "db.default.password = \${DB_PASSWORD}" >> /opt/tomcat/conf/application.properties && \
-    echo "application.mode = prod" >> /opt/tomcat/conf/application.properties && \
-    echo "application.locale = fr" >> /opt/tomcat/conf/application.properties
+# Générer le fichier application.properties
+RUN echo "db.default.driver=org.postgresql.Driver" > /opt/tomcat/conf/application.properties && \
+    echo "db.default.url=jdbc:postgresql://\${DB_HOST}:\${DB_PORT}/\${DB_NAME}" >> /opt/tomcat/conf/application.properties && \
+    echo "db.default.user=\${DB_USER}" >> /opt/tomcat/conf/application.properties && \
+    echo "db.default.password=\${DB_PASSWORD}" >> /opt/tomcat/conf/application.properties && \
+    echo "application.base-url=https://\${RAILWAY_STATIC_URL}" >> /opt/tomcat/conf/application.properties
 
-# Exposer le port Railway
 EXPOSE 8080
-
-# Lancer Tomcat
 CMD ["/opt/tomcat/bin/catalina.sh", "run"]
