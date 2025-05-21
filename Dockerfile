@@ -22,8 +22,14 @@ RUN wget https://downloads.apache.org/tomcat/tomcat-9/v9.0.85/bin/apache-tomcat-
 # Déployer le fichier WAR généré
 RUN cp build/libs/*.war /opt/tomcat/webapps/ROOT.war
 
-# Injecter application.properties
-COPY application.properties.template /opt/tomcat/conf/application.properties
+# Créer le fichier application.properties avec les variables d'environnement
+RUN mkdir -p /opt/tomcat/conf/ && \
+    echo "db.default.driver = org.postgresql.Driver" > /opt/tomcat/conf/application.properties && \
+    echo "db.default.url = jdbc:postgresql://\${DB_HOST}:\${DB_PORT}/\${DB_NAME}" >> /opt/tomcat/conf/application.properties && \
+    echo "db.default.user = \${DB_USER}" >> /opt/tomcat/conf/application.properties && \
+    echo "db.default.password = \${DB_PASSWORD}" >> /opt/tomcat/conf/application.properties && \
+    echo "application.mode = prod" >> /opt/tomcat/conf/application.properties && \
+    echo "application.locale = fr" >> /opt/tomcat/conf/application.properties
 
 # Exposer le port Railway
 EXPOSE 8080
